@@ -3,17 +3,17 @@ import os
 import json
 import subprocess
 import mimetypes
-import re
-import requests
+import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-import gspread
+from googleapiclient.http import MediaFileUpload
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ========== CONFIG ==========
-DRIVE_FILE_ID = "<PUT_YOUR_DRIVE_VIDEO_FILE_ID_HERE>"
-INPUT_VIDEO = "movie.mp4"
-LOGO_FILE = "logo.png"  # Optional, supports image or video
+DRIVE_FILE_ID = "1Xyqk2ti5S2lKtELz2AWwdzeQI94KCQzf" # movie.webm file ID in Google Drive
+DRIVE_FOLDER_ID = "1zgLj5Wg42TFIsi4-60J2w757gvaojcQO"  # Project3-S2 folder ID
+INPUT_VIDEO = "movie.mp4"  # Will convert from movie.webm
+LOGO_FILE = "logo.png"  # Optional logo file
 OUTPUT_DIR = "output_parts"
 CLIP_LENGTH = 40  # seconds
 TOP_TEXT = "Superhit Don no.1"
@@ -25,8 +25,6 @@ CANVAS_W = 1080
 CANVAS_H = 1920
 TOP_MARGIN = 100
 BOTTOM_MARGIN = 150
-
-DRIVE_FOLDER_NAME = "Project3-S2"
 SHEET_NAME = "Project3-S3"
 
 # ========== GOOGLE AUTH ==========
@@ -39,7 +37,7 @@ drive_service = build('drive', 'v3', credentials=credentials)
 sheet_client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds_json))
 sheet = sheet_client.open(SHEET_NAME).sheet1
 
-# ========== STEP 0: Download video from Google Drive ==========
+# ========== STEP 0: Download movie.webm from Google Drive ==========
 def download_from_drive(file_id, dest_path):
     request = drive_service.files().get_media(fileId=file_id)
     with open(dest_path, 'wb') as f:
@@ -47,29 +45,39 @@ def download_from_drive(file_id, dest_path):
         response, content = downloader(request.uri, method='GET')
         f.write(content)
 
-if not os.path.exists(INPUT_VIDEO):
-    print("⬇️ Downloading movie from Google Drive...")
-    download_from_drive(DRIVE_FILE_ID, INPUT_VIDEO)
+if not os.path.exists("movie.webm"):
+    print("⬇️ Downloading movie.webm from Google Drive...")
+    download_from_drive(DRIVE_FILE_ID, "movie.webm")
+
+# ========== Convert to movie.mp4 ==========
+if os.path.exists("movie.webm") and not os.path.exists("movie.mp4"):
+    print("🎬 Converting movie.webm to movie.mp4...")
+    subprocess.run([
+        "ffmpeg", "-i", "movie.webm",
+        "-c:v", "libx264",
+        "-c:a", "aac",
+        "-movflags", "+faststart",
+        INPUT_VIDEO
+    ], check=True)
 
 # ========== PREP ==========
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ========== STEP 1: Get Video Duration ==========
-result = subprocess.run(
-    ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-     "-of", "default=noprint_wrappers=1:nokey=1", INPUT_VIDEO],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT
-)
-duration = float(result.stdout)
+result = subprocess.run([
+    "ffprobe", "-v", "error", "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1", INPUT_VIDEO
+], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+duration = float(result.stdout.decode().strip())
 total_parts = int(duration // CLIP_LENGTH) + 1
+print(f"🎞️ Total duration: {duration:.2f}s, Parts: {total_parts}")
 
-# ========== STEP 2: Split Video with Overlays ==========
+# ========== STEP 2: Process and Upload Each Clip ==========
 for i in range(total_parts):
     start = i * CLIP_LENGTH
-    output_file = os.path.join(OUTPUT_DIR, f"part_{i+1:03}.mp4")
     part_label = f"{BOTTOM_TEXT_PREFIX}{i+1}"
+    temp_output = os.path.join(OUTPUT_DIR, f"temp_{i+1:03}.mp4")
+    final_output = os.path.join(OUTPUT_DIR, f"part_{i+1:03}.mp4")
 
     filter_parts = [
         f"scale={CANVAS_W}:{CANVAS_H}:force_original_aspect_ratio=decrease",
@@ -81,50 +89,40 @@ for i in range(total_parts):
     if os.path.exists(LOGO_FILE):
         mime = mimetypes.guess_type(LOGO_FILE)[0]
         if mime and mime.startswith('video'):
-            overlay_cmd = f"[1:v]scale=200:200[logo];[0:v][logo]overlay=W-w-50:50"
+            filter_parts.append(f"movie={LOGO_FILE},scale=200:200[logo];[0:v][logo]overlay=W-w-50:50")
         else:
-            overlay_cmd = f"overlay=W-w-50:50"
-        filter_parts.append(f"movie={LOGO_FILE},{overlay_cmd}")
+            filter_parts.append(f"movie={LOGO_FILE},scale=200:200[logo];[in][logo]overlay=W-w-50:50")
 
     vf_filter = ",".join(filter_parts)
 
+    # Step 2a: Generate temp output with overlay
     cmd = [
-        "ffmpeg",
-        "-ss", str(start),
-        "-i", INPUT_VIDEO,
+        "ffmpeg", "-ss", str(start), "-i", INPUT_VIDEO,
         *( ["-i", LOGO_FILE] if os.path.exists(LOGO_FILE) else [] ),
-        "-t", str(CLIP_LENGTH),
-        "-vf", vf_filter,
-        "-r", "30",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-ac", "2",
-        "-ar", "44100",
-        "-movflags", "+faststart",
-        output_file
+        "-t", str(CLIP_LENGTH), "-vf", vf_filter,
+        "-r", "30", "-c:v", "libx264", "-preset", "fast",
+        "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
+        "-movflags", "+faststart", temp_output
     ]
+    subprocess.run(cmd, check=True)
 
-    subprocess.run(cmd)
+    # Step 2b: Clean metadata and save to final_output
+    subprocess.run([
+        "ffmpeg", "-i", temp_output,
+        "-map_metadata", "-1",
+        "-movflags", "+faststart",
+        "-c", "copy", final_output
+    ], check=True)
+    os.remove(temp_output)
 
     # ========== STEP 3: Upload to Google Drive ==========
-    file_metadata = {'name': os.path.basename(output_file), 'parents': [DRIVE_FOLDER_NAME]}
-    media_mime = mimetypes.guess_type(output_file)[0] or 'video/mp4'
-
-    with open(output_file, 'rb') as f:
-        upload = drive_service.files().create(
-            body=file_metadata,
-            media_body=f,
-            fields='id'
-        ).execute()
+    file_metadata = {'name': os.path.basename(final_output), 'parents': [DRIVE_FOLDER_ID]}
+    media_mime = mimetypes.guess_type(final_output)[0] or 'video/mp4'
+    media = MediaFileUpload(final_output, mimetype=media_mime, resumable=True)
+    drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
 
     # ========== STEP 4: Update Google Sheet ==========
-    sheet.append_row([
-        part_label,
-        os.path.basename(output_file),
-        CLIP_LENGTH,
-        "uploaded"
-    ])
+    sheet.append_row([part_label, os.path.basename(final_output), CLIP_LENGTH, "uploaded"])
+    print(f"✅ Uploaded: {final_output}")
 
-print("\n✅ All done!")
+print("\n🎉 All done! All parts are Instagram Reels-ready and uploaded to Drive.")
