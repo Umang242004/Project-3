@@ -1,21 +1,22 @@
-
 # main.py
 import os
 import json
 import subprocess
 import mimetypes
 import re
+import requests
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ========== CONFIG ==========
+DRIVE_FILE_ID = "<PUT_YOUR_DRIVE_VIDEO_FILE_ID_HERE>"
 INPUT_VIDEO = "movie.mp4"
 LOGO_FILE = "logo.png"  # Optional, supports image or video
 OUTPUT_DIR = "output_parts"
 CLIP_LENGTH = 40  # seconds
-TOP_TEXT = "Superhit Don no.1"  # upper title , change as per your own title 
+TOP_TEXT = "Superhit Don no.1"
 BOTTOM_TEXT_PREFIX = "PART-"
 FONT_FILE = "arial.ttf"
 FONT_SIZE = 64
@@ -37,6 +38,18 @@ credentials = service_account.Credentials.from_service_account_info(creds_json, 
 drive_service = build('drive', 'v3', credentials=credentials)
 sheet_client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds_json))
 sheet = sheet_client.open(SHEET_NAME).sheet1
+
+# ========== STEP 0: Download video from Google Drive ==========
+def download_from_drive(file_id, dest_path):
+    request = drive_service.files().get_media(fileId=file_id)
+    with open(dest_path, 'wb') as f:
+        downloader = drive_service._http.request
+        response, content = downloader(request.uri, method='GET')
+        f.write(content)
+
+if not os.path.exists(INPUT_VIDEO):
+    print("⬇️ Downloading movie from Google Drive...")
+    download_from_drive(DRIVE_FILE_ID, INPUT_VIDEO)
 
 # ========== PREP ==========
 if not os.path.exists(OUTPUT_DIR):
@@ -98,13 +111,13 @@ for i in range(total_parts):
     # ========== STEP 3: Upload to Google Drive ==========
     file_metadata = {'name': os.path.basename(output_file), 'parents': [DRIVE_FOLDER_NAME]}
     media_mime = mimetypes.guess_type(output_file)[0] or 'video/mp4'
-    media_body = {'mimeType': media_mime, 'name': os.path.basename(output_file)}
 
-    upload = drive_service.files().create(
-        body=file_metadata,
-        media_body=output_file,
-        fields='id'
-    ).execute()
+    with open(output_file, 'rb') as f:
+        upload = drive_service.files().create(
+            body=file_metadata,
+            media_body=f,
+            fields='id'
+        ).execute()
 
     # ========== STEP 4: Update Google Sheet ==========
     sheet.append_row([
