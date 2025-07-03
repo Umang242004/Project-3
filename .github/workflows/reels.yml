@@ -1,35 +1,37 @@
-# .github/workflows/reels.yml
-name: Reels Auto Split Upload
+name: Instagram Reels Video Splitter & Uploader
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-  build:
+  split-and-upload:
     runs-on: ubuntu-latest
 
+    env:
+      GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      - name: 📂 Checkout Repository
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: 🔧 Set Up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
 
-    - name: Install dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y ffmpeg
-        python -m pip install --upgrade pip
-        pip install google-api-python-client gspread oauth2client
+      - name: 🚀 Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Set GOOGLE_CREDENTIALS.json
-      run: echo "$GOOGLE_CREDENTIALS" > credentials.json
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+      - name: 💿 Install FFmpeg
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg
 
-    - name: Run script
-      run: python main.py
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+      - name: 🎞️ Run Video Split & Upload
+        run: |
+          python main.py
