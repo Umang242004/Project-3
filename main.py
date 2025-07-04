@@ -124,12 +124,13 @@ for i in range(total_parts):
     ]
     subprocess.run(cmd, check=True)
 
-    # Step 2: Strip metadata to make it Reels-safe
+    # Step 2: Re-encode and strip metadata (clean output for Reels)
     subprocess.run([
         "ffmpeg", "-i", temp_output,
-        "-map_metadata", "-1",
-        "-movflags", "+faststart",
-        "-c", "copy", final_output
+        "-c:v", "libx264", "-profile:v", "high", "-level", "4.0", "-pix_fmt", "yuv420p", "-r", "30",
+        "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
+        "-movflags", "+faststart", "-map_metadata", "-1",
+        final_output
     ], check=True)
     os.remove(temp_output)
 
