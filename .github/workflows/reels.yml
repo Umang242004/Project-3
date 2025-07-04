@@ -28,4 +28,4 @@ jobs:
         pip install gspread google-api-python-client oauth2client
 
     - name: Run parallel splitting script
-      run: python parallel_main.py
+      run: python main.py
