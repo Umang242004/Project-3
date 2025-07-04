@@ -13,6 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from oauth2client.service_account import ServiceAccountCredentials
 from googleapiclient.errors import HttpError
+import base64
 
 # ========== CONFIG ==========
 DRIVE_FILE_ID = "1Xyqk2ti5S2lKtELz2AWwdzeQI94KCQzf"
@@ -34,7 +35,16 @@ BOTTOM_MARGIN = 150
 SHEET_NAME = "Project3-S3"
 MAX_WORKERS = 4  # number of parallel workers
 
-creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+# ========== DECODE GOOGLE_CREDENTIALS ==========
+raw = os.environ.get("GOOGLE_CREDENTIALS", "")
+if not raw.strip():
+    raise Exception("❌ GOOGLE_CREDENTIALS secret is empty or not set.")
+try:
+    decoded = base64.b64decode(raw).decode()
+    creds_json = json.loads(decoded)
+except Exception as e:
+    raise Exception("❌ Failed to decode GOOGLE_CREDENTIALS. Ensure it is base64-encoded JSON.") from e
+
 credentials = service_account.Credentials.from_service_account_info(creds_json, scopes=[
     'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/spreadsheets'])
@@ -132,7 +142,7 @@ video_duration = get_video_duration(INPUT_VIDEO)
 total_parts = int(video_duration // CLIP_LENGTH) + 1
 existing_parts = get_existing_parts()
 
-print(f"🧩 Total parts: {total_parts}. Starting parallel processing with {MAX_WORKERS} workers.")
+print(f"🧹 Total parts: {total_parts}. Starting parallel processing with {MAX_WORKERS} workers.")
 
 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
     futures = {
