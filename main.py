@@ -1,9 +1,9 @@
-# main.py
 import os
 import json
 import subprocess
 import mimetypes
 import gspread
+import time
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -63,6 +63,19 @@ if os.path.exists("movie.webm") and not os.path.exists("movie.mp4"):
 # ========== PREP ==========
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+def safe_upload(file_metadata, media, retries=5):
+    for attempt in range(retries):
+        try:
+            request = drive_service.files().create(body=file_metadata, media_body=media, fields='id')
+            response = None
+            while response is None:
+                status, response = request.next_chunk()
+            return response['id']
+        except Exception as e:
+            print(f"⚠️ Upload attempt {attempt+1} failed: {e}")
+            time.sleep(5)
+    raise Exception("❌ Upload failed after multiple retries.")
+
 # ========== STEP 1: Get Video Duration ==========
 result = subprocess.run([
     "ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -119,7 +132,7 @@ for i in range(total_parts):
     file_metadata = {'name': os.path.basename(final_output), 'parents': [DRIVE_FOLDER_ID]}
     media_mime = mimetypes.guess_type(final_output)[0] or 'video/mp4'
     media = MediaFileUpload(final_output, mimetype=media_mime, resumable=True)
-    drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+    safe_upload(file_metadata, media)
 
     # ========== STEP 4: Update Google Sheet ==========
     sheet.append_row([part_label, os.path.basename(final_output), CLIP_LENGTH, "uploaded"])
