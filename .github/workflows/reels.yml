@@ -1,31 +1,35 @@
-# .github/workflows/split-upload.yml
-name: Split and Upload Video to Google Drive
+name: Auto Split & Upload Reels
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
   split-and-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
 
     env:
-      GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+      GOOGLE_CREDENTIALS_BASE64: ${{ secrets.GOOGLE_CREDENTIALS }}  # 🟢 base64-encoded JSON key
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      - name: 🧾 Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: 🐍 Set up Python 3.10
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
-        pip install gspread google-api-python-client oauth2client
+      - name: 🔧 Install system dependencies (FFmpeg)
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg
 
-    - name: Run parallel splitting script
-      run: python main.py
+      - name: 📦 Install Python packages
+        run: |
+          pip install --upgrade pip
+          pip install gspread google-api-python-client oauth2client
+
+      - name: ▶️ Run Parallel Video Splitter
+        run: python main.py
