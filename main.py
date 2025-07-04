@@ -1,26 +1,25 @@
 import os
-import math
-import time
-import subprocess
 import json
-import shutil
+import subprocess
 import mimetypes
+import time
+import ssl
+import traceback
+import gspread
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from googleapiclient.errors import HttpError
 
-# ================= CONFIG =================
-SOURCE_VIDEO = "movie.mp4"
-OUTPUT_FOLDER = "output_parts"
-PART_DURATION = 40  # seconds
-SHEET_NAME = "Project3-S3"
+# ========== CONFIG ==========
+DRIVE_FILE_ID = "1Xyqk2ti5S2lKtELz2AWwdzeQI94KCQzf"  # movie.webm
 DRIVE_FOLDER_ID = "1zgLj5Wg42TFIsi4-60J2w757gvaojcQO"
-GOOGLE_CREDENTIALS = json.loads(os.environ["GOOGLE_CREDENTIALS_JSON"])
-MAX_UPLOAD_RETRIES = 5
-UPLOAD_RETRY_DELAY = 5
-
-# Overlay Config
+INPUT_VIDEO = "movie.mp4"
+WEBM_FILE = "movie.webm"
+LOGO_FILE = "logo.png"
+OUTPUT_DIR = "output_parts"
+CLIP_LENGTH = 40
 TOP_TEXT = "Superhit Don no.1"
 BOTTOM_TEXT_PREFIX = "PART-"
 FONT_FILE = "arial.ttf"
@@ -30,139 +29,135 @@ CANVAS_W = 1080
 CANVAS_H = 1920
 TOP_MARGIN = 100
 BOTTOM_MARGIN = 150
-LOGO_FILE = "logo.png"
-# ==========================================
+SHEET_NAME = "Project3-S3"
 
-def load_google_clients():
-    creds = service_account.Credentials.from_service_account_info(
-        GOOGLE_CREDENTIALS,
-        scopes=["https://www.googleapis.com/auth/drive", "https://www.googleapis.com/auth/spreadsheets"],
-    )
-    drive_service = build("drive", "v3", credentials=creds)
-    sheet_client = gspread.authorize(creds)
-    return drive_service, sheet_client
+# ========== GOOGLE AUTH ==========
+creds_json = json.loads(os.environ["GOOGLE_CREDENTIALS"])
+credentials = service_account.Credentials.from_service_account_info(creds_json, scopes=[
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/spreadsheets'])
+drive_service = build('drive', 'v3', credentials=credentials)
+sheet_client = gspread.authorize(ServiceAccountCredentials.from_json_keyfile_dict(creds_json))
+sheet = sheet_client.open(SHEET_NAME).sheet1
 
-def get_video_duration(file_path):
+# ========== UTILS ==========
+def download_from_drive(file_id, dest_path):
+    print(f"⬇️ Downloading {file_id} ➜ {dest_path}")
+    request = drive_service.files().get_media(fileId=file_id)
+    with open(dest_path, 'wb') as f:
+        response, content = drive_service._http.request(request.uri, method='GET')
+        f.write(content)
+
+def get_video_duration(file):
+    result = subprocess.run([
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", file
+    ], stdout=subprocess.PIPE)
+    return float(result.stdout.decode().strip())
+
+def safe_run(cmd):
     try:
-        cmd = [
-            "ffprobe", "-v", "error", "-show_entries",
-            "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path
-        ]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-        return float(result.stdout.strip())
-    except Exception as e:
-        print(f"⚠️ Error getting duration of {file_path}: {e}")
-        return 0
+        subprocess.run(cmd, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"❌ FFmpeg failed: {e}")
+        traceback.print_exc()
+        return False
 
-def build_vf_filter(part_label):
+def safe_upload_to_drive(filepath, max_retries=3):
+    for attempt in range(1, max_retries + 1):
+        try:
+            file_metadata = {'name': os.path.basename(filepath), 'parents': [DRIVE_FOLDER_ID]}
+            mime = mimetypes.guess_type(filepath)[0] or 'video/mp4'
+            media = MediaFileUpload(filepath, mimetype=mime, resumable=True)
+            uploaded = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            return uploaded["id"]
+        except (HttpError, ssl.SSLEOFError, Exception) as e:
+            print(f"⚠️ Upload attempt {attempt} failed: {e}")
+            time.sleep(5)
+    print(f"❌ Skipped upload after {max_retries} attempts: {filepath}")
+    return None
+
+def get_existing_parts():
+    try:
+        return set(row[0] for row in sheet.get_all_values()[1:])
+    except Exception:
+        return set()
+
+# ========== STEP 0: PREP ==========
+if not os.path.exists(WEBM_FILE):
+    download_from_drive(DRIVE_FILE_ID, WEBM_FILE)
+
+if not os.path.exists(INPUT_VIDEO):
+    print("🎬 Converting webm ➜ mp4")
+    safe_run([
+        "ffmpeg", "-i", WEBM_FILE,
+        "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:a", "aac", "-movflags", "+faststart",
+        INPUT_VIDEO
+    ])
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+duration = get_video_duration(INPUT_VIDEO)
+total_parts = int(duration // CLIP_LENGTH) + 1
+print(f"🎞️ Duration: {duration:.2f}s → {total_parts} parts")
+
+existing_parts = get_existing_parts()
+
+# ========== STEP 1: SPLIT + PROCESS ==========
+for i in range(total_parts):
+    part_label = f"{BOTTOM_TEXT_PREFIX}{i+1}"
+    if part_label in existing_parts:
+        print(f"⏭️ Skipping {part_label} (already uploaded)")
+        continue
+
+    start = i * CLIP_LENGTH
+    temp_out = os.path.join(OUTPUT_DIR, f"temp_{i+1:03}.mp4")
+    final_out = os.path.join(OUTPUT_DIR, f"part_{i+1:03}.mp4")
+
     filter_parts = [
         f"scale={CANVAS_W}:{CANVAS_H}:force_original_aspect_ratio=decrease",
         f"pad={CANVAS_W}:{CANVAS_H}:(ow-iw)/2:(oh-ih)/2:color=white",
         f"drawtext=fontfile={FONT_FILE}:text='{TOP_TEXT}':fontsize={FONT_SIZE}:fontcolor={TEXT_COLOR}:x=(w-text_w)/2:y={TOP_MARGIN}",
         f"drawtext=fontfile={FONT_FILE}:text='{part_label}':fontsize={FONT_SIZE}:fontcolor={TEXT_COLOR}:x=(w-text_w)/2:y=h-{BOTTOM_MARGIN}-th"
     ]
+
     if os.path.exists(LOGO_FILE):
         mime = mimetypes.guess_type(LOGO_FILE)[0]
-        if mime and mime.startswith('video'):
-            filter_parts.append(f"movie={LOGO_FILE},scale=200:200[logo];[0:v][logo]overlay=W-w-50:50")
-        else:
-            filter_parts.append(f"movie={LOGO_FILE},scale=200:200[logo];[in][logo]overlay=W-w-50:50")
-    return ",".join(filter_parts)
+        overlay = f"movie={LOGO_FILE},scale=200:200[logo];[0:v][logo]overlay=W-w-50:50" if mime and mime.startswith('video') \
+            else f"movie={LOGO_FILE},scale=200:200[logo];[in][logo]overlay=W-w-50:50"
+        filter_parts.append(overlay)
 
-def split_video():
-    if os.path.exists(OUTPUT_FOLDER):
-        shutil.rmtree(OUTPUT_FOLDER)
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+    vf = ",".join(filter_parts)
 
-    total_duration = get_video_duration(SOURCE_VIDEO)
-    num_parts = math.ceil(total_duration / PART_DURATION)
+    # Step 1a: Create temp with overlay
+    if not safe_run([
+        "ffmpeg", "-ss", str(start), "-t", str(CLIP_LENGTH), "-i", INPUT_VIDEO,
+        *(["-i", LOGO_FILE] if os.path.exists(LOGO_FILE) else []),
+        "-vf", vf, "-r", "30", "-preset", "ultrafast",
+        "-c:v", "libx264", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
+        "-movflags", "+faststart", temp_out
+    ]):
+        sheet.append_row([part_label, os.path.basename(final_out), 0, "ffmpeg_error"])
+        continue
 
-    print(f"🎞️ Total duration: {total_duration}s, Parts: {num_parts}")
-    for i in range(num_parts):
-        start = i * PART_DURATION
-        part_label = f"{BOTTOM_TEXT_PREFIX}{i+1}"
-        temp_output = f"{OUTPUT_FOLDER}/temp_{i+1:03}.mp4"
-        final_output = f"{OUTPUT_FOLDER}/part_{i+1:03}.mp4"
+    # Step 1b: Clean metadata
+    if not safe_run([
+        "ffmpeg", "-i", temp_out, "-map_metadata", "-1", "-movflags", "+faststart", "-c", "copy", final_out
+    ]):
+        sheet.append_row([part_label, os.path.basename(final_out), 0, "finalize_error"])
+        continue
 
-        vf_filter = build_vf_filter(part_label)
+    os.remove(temp_out)
 
-        cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-            "-ss", str(start),
-            "-t", str(PART_DURATION),
-            "-i", SOURCE_VIDEO,
-            *( ["-i", LOGO_FILE] if os.path.exists(LOGO_FILE) else [] ),
-            "-vf", vf_filter,
-            "-r", "30",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
-            "-movflags", "+faststart",
-            temp_output
-        ]
+    # Step 2: Upload
+    file_id = safe_upload_to_drive(final_out)
+    actual_duration = round(get_video_duration(final_out), 2)
 
-        print(f"⏳ Encoding Part {i+1}/{num_parts}")
-        try:
-            subprocess.run(cmd, check=True)
-            subprocess.run(["ffmpeg", "-y", "-i", temp_output, "-map_metadata", "-1", "-movflags", "+faststart", "-c", "copy", final_output], check=True)
-            os.remove(temp_output)
-            print(f"✅ Part {i+1} saved: {final_output}")
-        except subprocess.CalledProcessError as e:
-            print(f"❌ FFmpeg failed on part {i+1}: {e}")
-            raise
+    if file_id:
+        sheet.append_row([part_label, os.path.basename(final_out), actual_duration, "uploaded"])
+        print(f"✅ Uploaded {final_out}")
+    else:
+        sheet.append_row([part_label, os.path.basename(final_out), actual_duration, "upload_failed"])
 
-def upload_with_retry(drive_service, file_path, max_retries=MAX_UPLOAD_RETRIES):
-    for attempt in range(max_retries):
-        try:
-            filename = os.path.basename(file_path)
-            file_metadata = {
-                "name": filename,
-                "parents": [DRIVE_FOLDER_ID]
-            }
-            mime = mimetypes.guess_type(file_path)[0] or 'video/mp4'
-            media = MediaFileUpload(file_path, mimetype=mime, resumable=True)
-            file = drive_service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-            print(f"✅ Uploaded: {filename} (ID: {file.get('id')})")
-            return file.get("id")
-        except Exception as e:
-            wait_time = UPLOAD_RETRY_DELAY * (2 ** attempt)
-            print(f"❌ Upload failed (attempt {attempt+1}/{max_retries}): {e}")
-            print(f"🔁 Retrying in {wait_time}s...")
-            time.sleep(wait_time)
-    raise Exception(f"🚨 Upload permanently failed for {file_path} after {max_retries} attempts.")
-
-def update_sheet(sheet, filename, part_number, duration):
-    try:
-        sheet.append_row([f"PART-{part_number}", filename, duration, "Uploaded"])
-    except Exception as e:
-        print(f"⚠️ Failed to update sheet for {filename}: {e}")
-
-def main():
-    try:
-        print("🔐 Authenticating with Google...")
-        drive_service, sheet_client = load_google_clients()
-        sheet = sheet_client.open(SHEET_NAME).sheet1
-
-        print("🔪 Splitting video...")
-        split_video()
-
-        print("☁️ Uploading parts to Drive...")
-        for filename in sorted(os.listdir(OUTPUT_FOLDER)):
-            if not filename.endswith(".mp4"):
-                continue
-            full_path = os.path.join(OUTPUT_FOLDER, filename)
-            part_number = int(filename.split("_")[1].split(".")[0])
-
-            try:
-                upload_with_retry(drive_service, full_path)
-                duration = get_video_duration(full_path)
-                update_sheet(sheet, filename, part_number, duration)
-            except Exception as e:
-                print(f"🔥 Failed to upload {filename}: {e}")
-                break
-
-        print("🎉 All done!")
-    except Exception as e:
-        print(f"💥 Fatal error occurred: {e}")
-
-if __name__ == "__main__":
-    main()
+print("\n🎉 All done!")
