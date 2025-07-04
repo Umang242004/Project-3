@@ -100,7 +100,7 @@ for i in range(total_parts):
         "ffmpeg", "-ss", str(start), "-i", INPUT_VIDEO,
         *( ["-i", LOGO_FILE] if os.path.exists(LOGO_FILE) else [] ),
         "-t", str(CLIP_LENGTH), "-vf", vf_filter,
-        "-r", "30", "-c:v", "libx264", "-preset", "fast",
+        "-r", "30", "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "26",
         "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "44100",
         "-movflags", "+faststart", temp_output
     ]
