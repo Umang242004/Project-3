@@ -53,7 +53,7 @@ if not os.path.exists("movie.webm"):
     download_from_drive(DRIVE_FILE_ID, "movie.webm")
 
 # ========== CONVERT .webm ➜ .mp4 with IG/FB SAFE SETTINGS ==========
-if os.path.exists("movie.webm") and not not os.path.exists(INPUT_VIDEO):
+if os.path.exists("movie.webm") and not os.path.exists(INPUT_VIDEO):
     print("🎬 Converting to Instagram-compatible .mp4...")
     subprocess.run([
         "ffmpeg", "-i", "movie.webm",
