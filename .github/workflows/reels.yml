@@ -1,11 +1,12 @@
-# .github/workflows/reels.yml
-name: Reels Auto Split Upload
+name: Convert WebM to MP4
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  build:
+  convert:
     runs-on: ubuntu-latest
 
     steps:
@@ -19,17 +20,13 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo apt update
-        sudo apt install -y ffmpeg
         python -m pip install --upgrade pip
-        pip install google-api-python-client gspread oauth2client
+        pip install tqdm google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2
 
-    - name: Set GOOGLE_CREDENTIALS.json
-      run: echo "$GOOGLE_CREDENTIALS" > credentials.json
+    - name: Install ffmpeg
+      run: sudo apt-get install -y ffmpeg
+
+    - name: Run conversion script
       env:
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-
-    - name: Run script
       run: python main.py
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
