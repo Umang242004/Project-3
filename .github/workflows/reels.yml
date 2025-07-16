@@ -1,35 +1,35 @@
-name: Process Reels from WebM 
+# .github/workflows/reels.yml
+name: Reels Auto Split Upload
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
-  process_reels:
+  build:
     runs-on: ubuntu-latest
 
-    env:
-      GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
-
     steps:
-      - name: 📥 Checkout Repo
-        uses: actions/checkout@v3
+    - name: Checkout repo
+      uses: actions/checkout@v3
 
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: 🔧 Install FFmpeg
-        run: |
-          sudo apt update
-          sudo apt install -y ffmpeg
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y ffmpeg
+        python -m pip install --upgrade pip
+        pip install google-api-python-client gspread oauth2client
 
-      - name: 📦 Install Python dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install google-api-python-client google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client oauth2client
+    - name: Set GOOGLE_CREDENTIALS.json
+      run: echo "$GOOGLE_CREDENTIALS" > credentials.json
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
 
-      - name: ▶️ Run Reel Processing
-        run: python main.py
+    - name: Run script
+      run: python main.py
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
