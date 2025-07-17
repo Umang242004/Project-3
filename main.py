@@ -1,4 +1,3 @@
-```python
 import os
 import json
 import subprocess
@@ -243,4 +242,3 @@ for i in range(total_parts):
     print(f"🗑️ Cleaned up local file: {final_output}")
 
 print("\n🎉 All done! All parts are processed, uploaded to Drive, and sheet updated.")
-```
