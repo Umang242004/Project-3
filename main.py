@@ -1,3 +1,4 @@
+```python
 import os
 import json
 import subprocess
@@ -53,15 +54,16 @@ if not all([CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN]):
     raise ValueError("Missing Google Drive OAuth secrets (GDRIVE_CLIENT_ID, GDRIVE_CLIENT_SECRET, GDRIVE_REFRESH_TOKEN) in environment variables. Please check GitHub Actions secrets.")
 
 # Construct credentials object using the refresh token
-creds_data = {
-    'token': None, # Access token will be retrieved using refresh token
-    'refresh_token': REFRESH_TOKEN,
-    'token_uri': 'https://oauth2.googleapis.com/token',
-    'client_id': CLIENT_ID,
-    'client_secret': CLIENT_SECRET,
-    'scopes': SCOPES
-}
-creds = Credentials.from_info(creds_data)
+# --- START OF CHANGE ---
+creds = Credentials(
+    token=None, # Access token will be retrieved using refresh token
+    refresh_token=REFRESH_TOKEN,
+    token_uri='https://oauth2.googleapis.com/token',
+    client_id=CLIENT_ID,
+    client_secret=CLIENT_SECRET,
+    scopes=SCOPES
+)
+# --- END OF CHANGE ---
 
 # Refresh credentials if expired (this will use the refresh token)
 try:
@@ -241,3 +243,4 @@ for i in range(total_parts):
     print(f"🗑️ Cleaned up local file: {final_output}")
 
 print("\n🎉 All done! All parts are processed, uploaded to Drive, and sheet updated.")
+```
