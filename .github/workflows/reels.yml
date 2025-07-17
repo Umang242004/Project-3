@@ -1,35 +1,47 @@
-# .github/workflows/reels.yml
-name: Reels Auto Split Upload
+name: Auto Video Split and Upload to Drive
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - main # Trigger on pushes to the 'main' branch (adjust if your primary branch is different)
+  workflow_dispatch: # Allows manual triggering from the GitHub Actions UI
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  process_and_upload:
+    runs-on: ubuntu-latest # Use a Linux-based runner
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v4 # Action to get your repository code
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5 # Action to set up Python environment
       with:
-        python-version: '3.10'
+        python-version: '3.9' # Specify a Python version compatible with your libraries
 
-    - name: Install dependencies
+    - name: Install Python dependencies
       run: |
-        sudo apt update
-        sudo apt install -y ffmpeg
         python -m pip install --upgrade pip
-        pip install google-api-python-client gspread oauth2client
+        pip install google-api-python-client google-auth-oauthlib google-auth-httplib2 gspread
 
-    - name: Set GOOGLE_CREDENTIALS.json
-      run: echo "$GOOGLE_CREDENTIALS" > credentials.json
-      env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+    - name: Install FFmpeg and FFprobe
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg # Install FFmpeg and FFprobe
 
-    - name: Run script
-      run: python main.py
+    - name: Check for optional logo file
+      id: check_logo
+      run: |
+        if [ -f "logo.png" ]; then
+          echo "logo_exists=true" >> $GITHUB_OUTPUT
+        else
+          echo "logo_exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run Video Processing and Upload Script
       env:
-        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        # Pass your GitHub Secrets as environment variables to the Python script
+        GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
+        GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
+        GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
+      run: python main.py # Execute your main Python script
